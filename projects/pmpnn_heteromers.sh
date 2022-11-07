@@ -4,10 +4,10 @@ path_for_assigned_chains=$PWD"/assigned_pdbs.jsonl"
 path_for_fixed_positions=$PWD"/fixed_pdbs.jsonl"
 #path_for_tied_positions=$PWD"/tied_pdbs.jsonl"
 path_for_bias=$PWD"/bias_pdbs.jsonl"
-AA_list="D E"
-bias_list="-1.39 -1.39"
+AA_list="D E C"
+bias_list="-1.39 -1.39 -2.0"
 chains_to_design="A B"
-fixed_positions="11 12 13 14 15 16 17 20 39 42 43 81,1 2 3 4"
+fixed_positions="1 12 13 14 15 16 17 18 21 40 43 44 73 74 75 76 77 82,1 2 3 4"
 #tied_positions="1 2 3 4 5 6 7 8, 1 2 3 4 5 6 7 8" #two list must match in length; residue 1 in chain A and C will be sampled togther;
 
 python3 $PMPNN//helper_scripts/parse_multiple_chains.py --input_path=$PWD --output_path=$path_for_parsed_chains

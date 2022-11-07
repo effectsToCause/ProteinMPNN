@@ -67,9 +67,6 @@ def parse_PDB_biounits(x, atoms=['N','CA','C'], chain=None):
     if line[:6] == "HETATM" and line[17:17+3] == "MSE":
       line = line.replace("HETATM","ATOM  ")
       line = line.replace("MSE","MET")
-    
-    if line[17:17+3] == "HIE":
-      line = line.replace("HIE","HIS")
 
     if line[:4] == "ATOM":
       ch = line[21:22]
@@ -118,7 +115,7 @@ def parse_PDB_biounits(x, atoms=['N','CA','C'], chain=None):
   except TypeError:
       return 'no_chain', 'no_chain'
 
-def parse_PDB(path_to_pdb, input_chain_list=None):
+def parse_PDB(path_to_pdb, input_chain_list=None, ca_only=False):
     c=0
     pdb_dict_list = []
     init_alphabet = ['A', 'B', 'C', 'D', 'E', 'F', 'G','H', 'I', 'J','K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T','U', 'V','W','X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g','h', 'i', 'j','k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't','u', 'v','w','x', 'y', 'z']
@@ -141,15 +138,22 @@ def parse_PDB(path_to_pdb, input_chain_list=None):
         concat_mask = []
         coords_dict = {}
         for letter in chain_alphabet:
-            xyz, seq = parse_PDB_biounits(biounit, atoms=['N','CA','C','O'], chain=letter)
+            if ca_only:
+                sidechain_atoms = ['CA']
+            else:
+                sidechain_atoms = ['N', 'CA', 'C', 'O']
+            xyz, seq = parse_PDB_biounits(biounit, atoms=sidechain_atoms, chain=letter)
             if type(xyz) != str:
                 concat_seq += seq[0]
                 my_dict['seq_chain_'+letter]=seq[0]
                 coords_dict_chain = {}
-                coords_dict_chain['N_chain_'+letter]=xyz[:,0,:].tolist()
-                coords_dict_chain['CA_chain_'+letter]=xyz[:,1,:].tolist()
-                coords_dict_chain['C_chain_'+letter]=xyz[:,2,:].tolist()
-                coords_dict_chain['O_chain_'+letter]=xyz[:,3,:].tolist()
+                if ca_only:
+                    coords_dict_chain['CA_chain_'+letter]=xyz.tolist()
+                else:
+                    coords_dict_chain['N_chain_' + letter] = xyz[:, 0, :].tolist()
+                    coords_dict_chain['CA_chain_' + letter] = xyz[:, 1, :].tolist()
+                    coords_dict_chain['C_chain_' + letter] = xyz[:, 2, :].tolist()
+                    coords_dict_chain['O_chain_' + letter] = xyz[:, 3, :].tolist()
                 my_dict['coords_chain_'+letter]=coords_dict_chain
                 s += 1
         fi = biounit.rfind("/")
@@ -163,13 +167,16 @@ def parse_PDB(path_to_pdb, input_chain_list=None):
 
 
 
-def tied_featurize(batch, device, chain_dict, fixed_position_dict=None, omit_AA_dict=None, tied_positions_dict=None, pssm_dict=None, bias_by_res_dict=None):
+def tied_featurize(batch, device, chain_dict, fixed_position_dict=None, omit_AA_dict=None, tied_positions_dict=None, pssm_dict=None, bias_by_res_dict=None, ca_only=False):
     """ Pack and pad batch into torch tensors """
     alphabet = 'ACDEFGHIKLMNPQRSTVWYX'
     B = len(batch)
     lengths = np.array([len(b['seq']) for b in batch], dtype=np.int32) #sum of chain seq lengths
     L_max = max([len(b['seq']) for b in batch])
-    X = np.zeros([B, L_max, 4, 3])
+    if ca_only:
+        X = np.zeros([B, L_max, 1, 3])
+    else:
+        X = np.zeros([B, L_max, 4, 3])
     residue_idx = -100*np.ones([B, L_max], dtype=np.int32)
     chain_M = np.zeros([B, L_max], dtype=np.int32) #1.0 for the bits that need to be predicted
     pssm_coef_all = np.zeros([B, L_max], dtype=np.float32) #1.0 for the bits that need to be predicted
@@ -227,7 +234,12 @@ def tied_featurize(batch, device, chain_dict, fixed_position_dict=None, omit_AA_
                 global_idx_start_list.append(global_idx_start_list[-1]+chain_length)
                 chain_coords = b[f'coords_chain_{letter}'] #this is a dictionary
                 chain_mask = np.zeros(chain_length) #0.0 for visible chains
-                x_chain = np.stack([chain_coords[c] for c in [f'N_chain_{letter}', f'CA_chain_{letter}', f'C_chain_{letter}', f'O_chain_{letter}']], 1) #[chain_lenght,4,3]
+                if ca_only:
+                    x_chain = np.array(chain_coords[f'CA_chain_{letter}']) #[chain_lenght,1,3] #CA_diff
+                    if len(x_chain.shape) == 2:
+                        x_chain = x_chain[:,None,:]
+                else:
+                    x_chain = np.stack([chain_coords[c] for c in [f'N_chain_{letter}', f'CA_chain_{letter}', f'C_chain_{letter}', f'O_chain_{letter}']], 1) #[chain_lenght,4,3]
                 x_chain_list.append(x_chain)
                 chain_mask_list.append(chain_mask)
                 chain_seq_list.append(chain_seq)
@@ -257,7 +269,12 @@ def tied_featurize(batch, device, chain_dict, fixed_position_dict=None, omit_AA_
                 masked_chain_length_list.append(chain_length)
                 chain_coords = b[f'coords_chain_{letter}'] #this is a dictionary
                 chain_mask = np.ones(chain_length) #1.0 for masked
-                x_chain = np.stack([chain_coords[c] for c in [f'N_chain_{letter}', f'CA_chain_{letter}', f'C_chain_{letter}', f'O_chain_{letter}']], 1) #[chain_lenght,4,3]
+                if ca_only:
+                    x_chain = np.array(chain_coords[f'CA_chain_{letter}']) #[chain_lenght,1,3] #CA_diff
+                    if len(x_chain.shape) == 2:
+                        x_chain = x_chain[:,None,:]
+                else:
+                    x_chain = np.stack([chain_coords[c] for c in [f'N_chain_{letter}', f'CA_chain_{letter}', f'C_chain_{letter}', f'O_chain_{letter}']], 1) #[chain_lenght,4,3]               
                 x_chain_list.append(x_chain)
                 chain_mask_list.append(chain_mask)
                 chain_seq_list.append(chain_seq)
@@ -392,7 +409,11 @@ def tied_featurize(batch, device, chain_dict, fixed_position_dict=None, omit_AA_
     chain_M_pos = torch.from_numpy(chain_M_pos).to(dtype=torch.float32, device=device)
     omit_AA_mask = torch.from_numpy(omit_AA_mask).to(dtype=torch.float32, device=device)
     chain_encoding_all = torch.from_numpy(chain_encoding_all).to(dtype=torch.long, device=device)
-    return X, S, mask, lengths, chain_M, chain_encoding_all, letter_list_list, visible_list_list, masked_list_list, masked_chain_length_list_list, chain_M_pos, omit_AA_mask, residue_idx, dihedral_mask, tied_pos_list_of_lists_list, pssm_coef_all, pssm_bias_all, pssm_log_odds_all, bias_by_res_all, tied_beta
+    if ca_only:
+        X_out = X[:,:,0]
+    else:
+        X_out = X
+    return X_out, S, mask, lengths, chain_M, chain_encoding_all, letter_list_list, visible_list_list, masked_list_list, masked_chain_length_list_list, chain_M_pos, omit_AA_mask, residue_idx, dihedral_mask, tied_pos_list_of_lists_list, pssm_coef_all, pssm_bias_all, pssm_log_odds_all, bias_by_res_all, tied_beta
 
 
 
@@ -692,6 +713,189 @@ class PositionalEncodings(nn.Module):
         E = self.linear(d_onehot.float())
         return E
 
+
+
+class CA_ProteinFeatures(nn.Module):
+    def __init__(self, edge_features, node_features, num_positional_embeddings=16,
+        num_rbf=16, top_k=30, augment_eps=0., num_chain_embeddings=16):
+        """ Extract protein features """
+        super(CA_ProteinFeatures, self).__init__()
+        self.edge_features = edge_features
+        self.node_features = node_features
+        self.top_k = top_k
+        self.augment_eps = augment_eps 
+        self.num_rbf = num_rbf
+        self.num_positional_embeddings = num_positional_embeddings
+
+        # Positional encoding
+        self.embeddings = PositionalEncodings(num_positional_embeddings)
+        # Normalization and embedding
+        node_in, edge_in = 3, num_positional_embeddings + num_rbf*9 + 7
+        self.node_embedding = nn.Linear(node_in,  node_features, bias=False) #NOT USED
+        self.edge_embedding = nn.Linear(edge_in, edge_features, bias=False)
+        self.norm_nodes = nn.LayerNorm(node_features)
+        self.norm_edges = nn.LayerNorm(edge_features)
+
+
+    def _quaternions(self, R):
+        """ Convert a batch of 3D rotations [R] to quaternions [Q]
+            R [...,3,3]
+            Q [...,4]
+        """
+        # Simple Wikipedia version
+        # en.wikipedia.org/wiki/Rotation_matrix#Quaternion
+        # For other options see math.stackexchange.com/questions/2074316/calculating-rotation-axis-from-rotation-matrix
+        diag = torch.diagonal(R, dim1=-2, dim2=-1)
+        Rxx, Ryy, Rzz = diag.unbind(-1)
+        magnitudes = 0.5 * torch.sqrt(torch.abs(1 + torch.stack([
+              Rxx - Ryy - Rzz, 
+            - Rxx + Ryy - Rzz, 
+            - Rxx - Ryy + Rzz
+        ], -1)))
+        _R = lambda i,j: R[:,:,:,i,j]
+        signs = torch.sign(torch.stack([
+            _R(2,1) - _R(1,2),
+            _R(0,2) - _R(2,0),
+            _R(1,0) - _R(0,1)
+        ], -1))
+        xyz = signs * magnitudes
+        # The relu enforces a non-negative trace
+        w = torch.sqrt(F.relu(1 + diag.sum(-1, keepdim=True))) / 2.
+        Q = torch.cat((xyz, w), -1)
+        Q = F.normalize(Q, dim=-1)
+        return Q
+
+    def _orientations_coarse(self, X, E_idx, eps=1e-6):
+        dX = X[:,1:,:] - X[:,:-1,:]
+        dX_norm = torch.norm(dX,dim=-1)
+        dX_mask = (3.6<dX_norm) & (dX_norm<4.0) #exclude CA-CA jumps
+        dX = dX*dX_mask[:,:,None]
+        U = F.normalize(dX, dim=-1)
+        u_2 = U[:,:-2,:]
+        u_1 = U[:,1:-1,:]
+        u_0 = U[:,2:,:]
+        # Backbone normals
+        n_2 = F.normalize(torch.cross(u_2, u_1), dim=-1)
+        n_1 = F.normalize(torch.cross(u_1, u_0), dim=-1)
+
+        # Bond angle calculation
+        cosA = -(u_1 * u_0).sum(-1)
+        cosA = torch.clamp(cosA, -1+eps, 1-eps)
+        A = torch.acos(cosA)
+        # Angle between normals
+        cosD = (n_2 * n_1).sum(-1)
+        cosD = torch.clamp(cosD, -1+eps, 1-eps)
+        D = torch.sign((u_2 * n_1).sum(-1)) * torch.acos(cosD)
+        # Backbone features
+        AD_features = torch.stack((torch.cos(A), torch.sin(A) * torch.cos(D), torch.sin(A) * torch.sin(D)), 2)
+        AD_features = F.pad(AD_features, (0,0,1,2), 'constant', 0)
+
+        # Build relative orientations
+        o_1 = F.normalize(u_2 - u_1, dim=-1)
+        O = torch.stack((o_1, n_2, torch.cross(o_1, n_2)), 2)
+        O = O.view(list(O.shape[:2]) + [9])
+        O = F.pad(O, (0,0,1,2), 'constant', 0)
+        O_neighbors = gather_nodes(O, E_idx)
+        X_neighbors = gather_nodes(X, E_idx)
+        
+        # Re-view as rotation matrices
+        O = O.view(list(O.shape[:2]) + [3,3])
+        O_neighbors = O_neighbors.view(list(O_neighbors.shape[:3]) + [3,3])
+
+        # Rotate into local reference frames
+        dX = X_neighbors - X.unsqueeze(-2)
+        dU = torch.matmul(O.unsqueeze(2), dX.unsqueeze(-1)).squeeze(-1)
+        dU = F.normalize(dU, dim=-1)
+        R = torch.matmul(O.unsqueeze(2).transpose(-1,-2), O_neighbors)
+        Q = self._quaternions(R)
+
+        # Orientation features
+        O_features = torch.cat((dU,Q), dim=-1)
+        return AD_features, O_features
+
+
+
+    def _dist(self, X, mask, eps=1E-6):
+        """ Pairwise euclidean distances """
+        # Convolutional network on NCHW
+        mask_2D = torch.unsqueeze(mask,1) * torch.unsqueeze(mask,2)
+        dX = torch.unsqueeze(X,1) - torch.unsqueeze(X,2)
+        D = mask_2D * torch.sqrt(torch.sum(dX**2, 3) + eps)
+
+        # Identify k nearest neighbors (including self)
+        D_max, _ = torch.max(D, -1, keepdim=True)
+        D_adjust = D + (1. - mask_2D) * D_max
+        D_neighbors, E_idx = torch.topk(D_adjust, np.minimum(self.top_k, X.shape[1]), dim=-1, largest=False)
+        mask_neighbors = gather_edges(mask_2D.unsqueeze(-1), E_idx)
+        return D_neighbors, E_idx, mask_neighbors
+
+    def _rbf(self, D):
+        # Distance radial basis function
+        device = D.device
+        D_min, D_max, D_count = 2., 22., self.num_rbf
+        D_mu = torch.linspace(D_min, D_max, D_count).to(device)
+        D_mu = D_mu.view([1,1,1,-1])
+        D_sigma = (D_max - D_min) / D_count
+        D_expand = torch.unsqueeze(D, -1)
+        RBF = torch.exp(-((D_expand - D_mu) / D_sigma)**2)
+        return RBF
+
+    def _get_rbf(self, A, B, E_idx):
+        D_A_B = torch.sqrt(torch.sum((A[:,:,None,:] - B[:,None,:,:])**2,-1) + 1e-6) #[B, L, L]
+        D_A_B_neighbors = gather_edges(D_A_B[:,:,:,None], E_idx)[:,:,:,0] #[B,L,K]
+        RBF_A_B = self._rbf(D_A_B_neighbors)
+        return RBF_A_B
+
+    def forward(self, Ca, mask, residue_idx, chain_labels):
+        """ Featurize coordinates as an attributed graph """
+        if self.augment_eps > 0:
+            Ca = Ca + self.augment_eps * torch.randn_like(Ca)
+
+        D_neighbors, E_idx, mask_neighbors = self._dist(Ca, mask)
+
+        Ca_0 = torch.zeros(Ca.shape, device=Ca.device)
+        Ca_2 = torch.zeros(Ca.shape, device=Ca.device)
+        Ca_0[:,1:,:] = Ca[:,:-1,:]
+        Ca_1 = Ca
+        Ca_2[:,:-1,:] = Ca[:,1:,:]
+
+        V, O_features = self._orientations_coarse(Ca, E_idx)
+        
+        RBF_all = []
+        RBF_all.append(self._rbf(D_neighbors)) #Ca_1-Ca_1
+        RBF_all.append(self._get_rbf(Ca_0, Ca_0, E_idx)) 
+        RBF_all.append(self._get_rbf(Ca_2, Ca_2, E_idx))
+
+        RBF_all.append(self._get_rbf(Ca_0, Ca_1, E_idx))
+        RBF_all.append(self._get_rbf(Ca_0, Ca_2, E_idx))
+
+        RBF_all.append(self._get_rbf(Ca_1, Ca_0, E_idx))
+        RBF_all.append(self._get_rbf(Ca_1, Ca_2, E_idx))
+
+        RBF_all.append(self._get_rbf(Ca_2, Ca_0, E_idx))
+        RBF_all.append(self._get_rbf(Ca_2, Ca_1, E_idx))
+
+
+        RBF_all = torch.cat(tuple(RBF_all), dim=-1)
+
+
+        offset = residue_idx[:,:,None]-residue_idx[:,None,:]
+        offset = gather_edges(offset[:,:,:,None], E_idx)[:,:,:,0] #[B, L, K]
+
+        d_chains = ((chain_labels[:, :, None] - chain_labels[:,None,:])==0).long()
+        E_chains = gather_edges(d_chains[:,:,:,None], E_idx)[:,:,:,0]
+        E_positional = self.embeddings(offset.long(), E_chains)
+        E = torch.cat((E_positional, RBF_all, O_features), -1)
+        
+
+        E = self.edge_embedding(E)
+        E = self.norm_edges(E)
+        
+        return E, E_idx 
+
+
+
+
 class ProteinFeatures(nn.Module):
     def __init__(self, edge_features, node_features, num_positional_embeddings=16,
         num_rbf=16, top_k=30, augment_eps=0., num_chain_embeddings=16):
@@ -794,7 +998,7 @@ class ProteinFeatures(nn.Module):
 class ProteinMPNN(nn.Module):
     def __init__(self, num_letters, node_features, edge_features,
         hidden_dim, num_encoder_layers=3, num_decoder_layers=3,
-        vocab=21, k_neighbors=64, augment_eps=0.05, dropout=0.1):
+        vocab=21, k_neighbors=64, augment_eps=0.05, dropout=0.1, ca_only=False):
         super(ProteinMPNN, self).__init__()
 
         # Hyperparameters
@@ -803,7 +1007,11 @@ class ProteinMPNN(nn.Module):
         self.hidden_dim = hidden_dim
 
         # Featurization layers
-        self.features = ProteinFeatures(node_features, edge_features, top_k=k_neighbors, augment_eps=augment_eps)
+        if ca_only:
+            self.features = CA_ProteinFeatures(node_features, edge_features, top_k=k_neighbors, augment_eps=augment_eps)
+            self.W_v = nn.Linear(node_features, hidden_dim, bias=True)
+        else:
+            self.features = ProteinFeatures(node_features, edge_features, top_k=k_neighbors, augment_eps=augment_eps)
 
         self.W_e = nn.Linear(edge_features, hidden_dim, bias=True)
         self.W_s = nn.Embedding(vocab, hidden_dim)
@@ -914,8 +1122,9 @@ class ProteinMPNN(nn.Module):
         for t_ in range(N_nodes):
             t = decoding_order[:,t_] #[B]
             chain_mask_gathered = torch.gather(chain_mask, 1, t[:,None]) #[B]
+            mask_gathered = torch.gather(mask, 1, t[:,None]) #[B]
             bias_by_res_gathered = torch.gather(bias_by_res, 1, t[:,None,None].repeat(1,1,21))[:,0,:] #[B, 21]
-            if (chain_mask_gathered==0).all():
+            if (mask_gathered==0).all(): #for padded or missing regions only
                 S_t = torch.gather(S_true, 1, t[:,None])
             else:
                 # Hidden layers
@@ -1010,7 +1219,7 @@ class ProteinMPNN(nn.Module):
             logit_list = []
             done_flag = False
             for t in t_list:
-                if (chain_mask[:,t]==0).all():
+                if (mask[:,t]==0).all():
                     S_t = S_true[:,t]
                     for t in t_list:
                         h_S[:,t,:] = self.W_s(S_t)
@@ -1050,6 +1259,7 @@ class ProteinMPNN(nn.Module):
                     probs_masked = probs*(1.0-omit_AA_mask_gathered)
                     probs = probs_masked/torch.sum(probs_masked, dim=-1, keepdim=True) #[B, 21]
                 S_t_repeat = torch.multinomial(probs, 1).squeeze(-1)
+                S_t_repeat = (chain_mask[:,t]*S_t_repeat + (1-chain_mask[:,t])*S_true[:,t]).long() #hard pick fixed positions
                 for t in t_list:
                     h_S[:,t,:] = self.W_s(S_t_repeat)
                     S[:,t] = S_t_repeat
