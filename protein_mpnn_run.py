@@ -326,7 +326,7 @@ def main(args):
                                     l0 = 0
                                     for mc_length in list(np.array(masked_chain_length_list)[np.argsort(masked_list)])[:-1]:
                                         l0 += mc_length
-                                        native_seq = native_seq[:l0] + '/' + native_seq[l0:]
+                                        native_seq = native_seq[:l0] + ':' + native_seq[l0:]
                                         l0 += 1
                                     sorted_masked_chain_letters = np.argsort(masked_list_list[0])
                                     print_masked_chains = [masked_list_list[0][i] for i in sorted_masked_chain_letters]
@@ -356,7 +356,7 @@ def main(args):
                                 l0 = 0
                                 for mc_length in list(np.array(masked_chain_length_list)[np.argsort(masked_list)])[:-1]:
                                     l0 += mc_length
-                                    seq = seq[:l0] + '/' + seq[l0:]
+                                    seq = seq[:l0] + ':' + seq[l0:]
                                     l0 += 1
                                 score_print = np.format_float_positional(np.float32(score), unique=False, precision=4)
                                 global_score_print = np.format_float_positional(np.float32(global_score), unique=False, precision=4)
